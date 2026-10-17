@@ -13,8 +13,8 @@ import type {
   CancelEvent,
   PauseEvent,
   ResumeEvent,
-  TopUpEvent,
-  ClawbackEvent,
+  StreamTopUpEvent,
+  StreamClawbackedEvent,
   CreatedEvent,
   ForceCancelEvent,
   RecipientTransferEvent,
@@ -427,7 +427,7 @@ export function dispatchEvent(
       if (!handlers.onTopUp) break;
       // data: (amount: i128, new_balance: i128)
       const fields = tupleFields(event.value);
-      const data: TopUpEvent = {
+      const data: StreamTopUpEvent = {
         sender:     actor,
         amount:     i128Field(fields, 0),
         newBalance: i128Field(fields, 1),
@@ -440,7 +440,7 @@ export function dispatchEvent(
     case TOPIC.CLAWBACK: {
       if (!handlers.onClawback) break;
       // data: amount: i128 (bare scalar, not a tuple)
-      const data: ClawbackEvent = {
+      const data: StreamClawbackedEvent = {
         sender: actor,
         amount: scValToI128(event.value),
         ...seq,

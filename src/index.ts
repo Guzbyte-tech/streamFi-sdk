@@ -39,6 +39,9 @@ export type {
   IndexerSubscription,
   IndexerConfig,
   IndexerQueryMetric,
+  IndexerPage,
+  IndexerPageInfo,
+  FetchStreamsBySenderOptions,
 } from './indexer.js';
 export { KeypairSigner, LedgerSigner, LedgerErrorType, LedgerHardwareError, normalizeLedgerError, classifyLedgerError } from './signer.js';
 export type { Signer } from './signer.js';

@@ -181,8 +181,30 @@ export interface WithdrawEvent  { amount: bigint; recipient: string; totalWithdr
 export interface CancelEvent    { refundAmount: bigint; withdrawnSoFar: bigint; sender: string; sequence?: bigint; }
 export interface PauseEvent     { pausedAt: number; withdrawable: bigint; sender: string; sequence?: bigint; }
 export interface ResumeEvent    { resumedAt: number; sender: string; sequence?: bigint; }
-export interface TopUpEvent     { amount: bigint; newBalance: bigint; sender: string; sequence?: bigint; }
-export interface ClawbackEvent  { amount: bigint; sender: string; sequence?: bigint; }
+/** Published when the sender tops up a stream (`topped_up` topic). */
+export interface StreamTopUpEvent {
+  /** Amount added to the stream's deposit. */
+  amount: bigint;
+  /** Stream balance after the top-up. */
+  newBalance: bigint;
+  /** The address that funded the top-up (topics[1] actor). */
+  sender: string;
+  sequence?: bigint;
+}
+
+/** Published when the sender claws back unstreamed funds (`clawback` topic). */
+export interface StreamClawbackedEvent {
+  /** Amount clawed back to the sender. */
+  amount: bigint;
+  /** The address that initiated the clawback (topics[1] actor). */
+  sender: string;
+  sequence?: bigint;
+}
+
+/** @deprecated Use {@link StreamTopUpEvent}. */
+export type TopUpEvent = StreamTopUpEvent;
+/** @deprecated Use {@link StreamClawbackedEvent}. */
+export type ClawbackEvent = StreamClawbackedEvent;
 
 /** Published once when the factory deploys a new DripStream (`created` topic). */
 export interface CreatedEvent {
@@ -244,13 +266,31 @@ export interface EventGap {
   actual: bigint;
 }
 
+/** Maps each handler-facing event name to its decoded payload type. */
+export interface EventPayloadMap {
+  withdraw:          WithdrawEvent;
+  cancel:            CancelEvent;
+  pause:             PauseEvent;
+  resume:            ResumeEvent;
+  topUp:             StreamTopUpEvent;
+  clawback:          StreamClawbackedEvent;
+  created:           CreatedEvent;
+  forceCancel:       ForceCancelEvent;
+  recipientTransfer: RecipientTransferEvent;
+  operatorSet:       OperatorSetEvent;
+  operatorRevoke:    OperatorRevokedEvent;
+}
+
+/** Union of every decoded stream event payload. */
+export type StreamEventPayload = EventPayloadMap[keyof EventPayloadMap];
+
 export interface StreamEventHandlers {
   onWithdraw?: (e: WithdrawEvent)  => void;
   onCancel?:   (e: CancelEvent)    => void;
   onPause?:    (e: PauseEvent)     => void;
   onResume?:   (e: ResumeEvent)    => void;
-  onTopUp?:    (e: TopUpEvent)     => void;
-  onClawback?: (e: ClawbackEvent)  => void;
+  onTopUp?:    (e: StreamTopUpEvent) => void;
+  onClawback?: (e: StreamClawbackedEvent) => void;
   /** Called when the factory deploys a new stream. Optional — most subscribers attach after a stream already exists. */
   onCreated?:            (e: CreatedEvent)             => void;
   /** Called when the recipient force-cancels a paused stream. */

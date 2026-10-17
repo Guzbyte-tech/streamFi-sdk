@@ -221,3 +221,61 @@ describe('GraphQLIndexer — streamsBySender/streamsByRecipient', () => {
     expect(callHeaders['X-Custom']).toBe('value');
   });
 });
+
+describe('GraphQLIndexer.fetchStreamsBySender', () => {
+  const endpoint = 'https://indexer.example/graphql';
+  let indexer: GraphQLIndexer;
+
+  const page = {
+    streamsBySender: {
+      items: [{ id: '1' }, { id: '2' }],
+      pageInfo: { hasNextPage: true, hasPreviousPage: false, startCursor: 'c1', endCursor: 'c2' },
+    },
+  };
+
+  function mockFetch() {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: page }) });
+    globalThis.fetch = fetchFn as unknown as typeof fetch;
+    return fetchFn;
+  }
+
+  beforeEach(() => { indexer = new GraphQLIndexer(endpoint); });
+  afterEach(() => { indexer.cleanup(); });
+
+  it('sends first/after and decodes pageInfo', async () => {
+    const fetchFn = mockFetch();
+    const result = await indexer.fetchStreamsBySender('GSENDER', { first: 2, afterCursor: 'c0' });
+    const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
+    expect(body.variables).toEqual({ sender: 'GSENDER', first: 2, after: 'c0' });
+    expect(result.items).toHaveLength(2);
+    expect(result.pageInfo).toEqual({
+      hasNextPage: true, hasPreviousPage: false, startCursor: 'c1', endCursor: 'c2',
+    });
+  });
+
+  it('sends last/before for backward paging', async () => {
+    const fetchFn = mockFetch();
+    await indexer.fetchStreamsBySender('GSENDER', { last: 5, beforeCursor: 'c9' });
+    const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
+    expect(body.variables).toEqual({ sender: 'GSENDER', last: 5, before: 'c9' });
+  });
+
+  it('returns empty items and null cursors when the response has no page', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ data: {} }),
+    }) as unknown as typeof fetch;
+    const result = await indexer.fetchStreamsBySender('GSENDER');
+    expect(result).toEqual({
+      items: [],
+      pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null },
+    });
+  });
+
+  it('rejects conflicting cursor arguments', async () => {
+    await expect(
+      indexer.fetchStreamsBySender('G', { afterCursor: 'a', beforeCursor: 'b' }),
+    ).rejects.toThrow(/mutually exclusive/);
+    await expect(indexer.fetchStreamsBySender('G', { first: 1, beforeCursor: 'b' })).rejects.toThrow();
+    await expect(indexer.fetchStreamsBySender('G', { first: 0 })).rejects.toThrow(/positive integer/);
+  });
+});

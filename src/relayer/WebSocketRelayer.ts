@@ -196,6 +196,11 @@ export class WebSocketRelayer {
         };
 
         ws.onmessage = (event: MessageEvent) => {
+          // Any inbound frame proves the link is alive, not just a pong.
+          if (this.awaitingPong) {
+            this.awaitingPong = false;
+            this.clearHeartbeatTimeout();
+          }
           this.handleMessageSafe(event.data);
         };
 
@@ -272,6 +277,7 @@ export class WebSocketRelayer {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+    if (!(this.heartbeatIntervalMs > 0)) return;
     this.heartbeatInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === 1 && !this.awaitingPong) {
         try {
@@ -279,7 +285,7 @@ export class WebSocketRelayer {
           this.awaitingPong = true;
           this.heartbeatTimeout = setTimeout(() => {
             if (this.awaitingPong && this.ws) {
-              this.ws.close();
+              this.handleHeartbeatTimeout();
             }
           }, this.heartbeatTimeoutMs);
         } catch {
@@ -287,6 +293,35 @@ export class WebSocketRelayer {
         }
       }
     }, this.heartbeatIntervalMs);
+  }
+
+  /**
+   * No pong arrived in time: the connection is half-open (NAT timeout, device
+   * sleep). `close()` on such a socket may never fire `onclose`, so detach the
+   * dead socket and drive the reconnect ourselves instead of waiting on it.
+   */
+  private handleHeartbeatTimeout(): void {
+    const dead = this.ws;
+    this.stopHeartbeat();
+    this.ws = null;
+    if (dead) {
+      dead.onopen = null;
+      dead.onmessage = null;
+      dead.onclose = null;
+      dead.onerror = null;
+      try {
+        dead.close();
+      } catch {
+        // Socket already closed/closing; nothing to clean up.
+      }
+    }
+    if (this.isDestroyed) return;
+    if (this.reconnectEnabled && this.shouldAttemptReconnect()) {
+      void this.attemptReconnect();
+    } else {
+      if (this.isPermanentlyDown()) this.reconnectExhausted = true;
+      this.emitStateChange('disconnected');
+    }
   }
 
   private stopHeartbeat(): void {

@@ -152,6 +152,43 @@ function isPersistedQueryNotFound(body: unknown): boolean {
   );
 }
 
+/** Relay-style page metadata decoded from a GraphQL `pageInfo` object. */
+export interface IndexerPageInfo {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  startCursor: string | null;
+  endCursor: string | null;
+}
+
+/** A single cursor-paginated page of results. */
+export interface IndexerPage<T> {
+  items: T[];
+  pageInfo: IndexerPageInfo;
+}
+
+/** Options for {@link GraphQLIndexer.fetchStreamsBySender}. */
+export interface FetchStreamsBySenderOptions
+  extends Omit<GraphQLQueryOptions, 'query' | 'variables'> {
+  /** Page size when paging forward (with or without `afterCursor`). */
+  first?: number;
+  /** Page size when paging backward with `beforeCursor`. */
+  last?: number;
+  /** Return items after this cursor (a previous page's `pageInfo.endCursor`). */
+  afterCursor?: string;
+  /** Return items before this cursor (a previous page's `pageInfo.startCursor`). */
+  beforeCursor?: string;
+}
+
+function decodePageInfo(raw: unknown): IndexerPageInfo {
+  const info = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    hasNextPage: info.hasNextPage === true,
+    hasPreviousPage: info.hasPreviousPage === true,
+    startCursor: typeof info.startCursor === 'string' ? info.startCursor : null,
+    endCursor: typeof info.endCursor === 'string' ? info.endCursor : null,
+  };
+}
+
 interface PaginatedCollection {
   items: unknown[];
   hasNextPage: boolean;
@@ -824,6 +861,93 @@ export class GraphQLIndexer {
       query,
       variables: { sender: senderAddress },
     });
+  }
+
+  /**
+   * Cursor-paginated variant of {@link streamsBySender}.
+   *
+   * Uses Relay-style `first`/`after` (forward) or `last`/`before` (backward)
+   * arguments instead of offset/limit, so deep pages cost the same as the
+   * first and records created between page fetches cannot shift the window.
+   * The returned `pageInfo` is decoded so callers can feed `endCursor` /
+   * `startCursor` straight back in as `afterCursor` / `beforeCursor`.
+   *
+   * @param senderAddress The sender's Stellar account address
+   * @param options Page size, cursors and query configuration
+   * @throws if both `afterCursor` and `beforeCursor` are given, if a cursor is
+   *   mixed with the opposite page-size argument, or if a page size is not a
+   *   positive integer
+   */
+  async fetchStreamsBySender<T = unknown>(
+    senderAddress: string,
+    options: FetchStreamsBySenderOptions = {},
+  ): Promise<IndexerPage<T>> {
+    const { first, last, afterCursor, beforeCursor, ...queryOptions } = options;
+
+    if (afterCursor !== undefined && beforeCursor !== undefined) {
+      throw new Error('fetchStreamsBySender: afterCursor and beforeCursor are mutually exclusive');
+    }
+    for (const [name, size] of [['first', first], ['last', last]] as const) {
+      if (size !== undefined && (!Number.isInteger(size) || size < 1)) {
+        throw new Error(`fetchStreamsBySender: ${name} must be a positive integer`);
+      }
+    }
+    if (first !== undefined && last !== undefined) {
+      throw new Error('fetchStreamsBySender: first and last are mutually exclusive');
+    }
+    if (beforeCursor !== undefined && first !== undefined) {
+      throw new Error('fetchStreamsBySender: beforeCursor must be paired with last, not first');
+    }
+    if (afterCursor !== undefined && last !== undefined) {
+      throw new Error('fetchStreamsBySender: afterCursor must be paired with first, not last');
+    }
+
+    const backward = beforeCursor !== undefined || last !== undefined;
+    const variables: Record<string, unknown> = { sender: senderAddress };
+    if (backward) {
+      if (last !== undefined) variables.last = last;
+      if (beforeCursor !== undefined) variables.before = beforeCursor;
+    } else {
+      if (first !== undefined) variables.first = first;
+      if (afterCursor !== undefined) variables.after = afterCursor;
+    }
+
+    const query = `
+      query FetchStreamsBySender($sender: String!, $first: Int, $after: String, $last: Int, $before: String) {
+        streamsBySender(sender: $sender, first: $first, after: $after, last: $last, before: $before) {
+          items {
+            id
+            sender
+            recipient
+            token
+            ratePerSecond
+            startTime
+            endTime
+            withdrawn
+            deposited
+            paused
+            pausedAt
+            cancelled
+            clawbackEnabled
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+        }
+      }
+    `;
+    const data = await this.query<{
+      streamsBySender?: { items?: T[]; nodes?: T[]; results?: T[]; pageInfo?: unknown };
+    }>({ ...queryOptions, query, variables });
+
+    const connection = data?.streamsBySender;
+    return {
+      items: connection?.items ?? connection?.nodes ?? connection?.results ?? [],
+      pageInfo: decodePageInfo(connection?.pageInfo),
+    };
   }
 
   /**
